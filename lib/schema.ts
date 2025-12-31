@@ -25,6 +25,7 @@ export const orderItem = sqliteTable('order_items', {
     itemId: integer('item_id').notNull().references(() => items.itemId),
     orderitemQuantity: integer('quantity').notNull().default(1)
 });
+
 export const payments = sqliteTable('payments', {
     paymentId: integer('payment_id').primaryKey({autoIncrement: true}),
     orderId: integer('order_id').notNull().references(() => orders.orderId),

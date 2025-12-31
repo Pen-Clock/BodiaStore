@@ -1,7 +1,12 @@
 import { NextResponse } from 'next/server';
-import db from '../lib/db';
-import { items, customers, orders, orderItem, payments } from '../lib/schema';
+import db from '../../lib/db';
+import { items, customers, orders, orderItem, payments } from '../../lib/schema';
 import { eq, desc } from 'drizzle-orm';
+
+
+
+
+
 
 export async function GET()  {
   const rows = await db.select().from(todos).orderBy(desc(todos.id));
@@ -72,14 +77,4 @@ export async function checkoutProcedure(userId: string) {
 
     return { success: true, orderId: newOrder.id };
   });
-}
-/**
- * GET all item in the cart, 
- *  - get from order
- *  - get from customer 
- * add/remove item from a cart orderItem without a status 
- * 
- */
-export async function getCartItems(orderId: string) {
-    
 }

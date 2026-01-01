@@ -86,6 +86,7 @@ CREATE TRIGGER afterOrderItemInsert(
         WHERE orderId = NEW.orderId;
     END;
 )
+
 CREATE TRIGGER afterOrderItemChange(
     AFTER UPDATE ON orderItem
     FOR EACH ROW

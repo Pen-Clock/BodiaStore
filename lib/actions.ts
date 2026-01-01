@@ -2,7 +2,7 @@
 import { NextResponse } from 'next/server';
 import db from './db';
 import { items, customers, orders, orderItems, payments , cart} from './schema';
-import { eq, desc , and,inArray } from 'drizzle-orm';
+import { eq, desc , and,inArray , sql} from 'drizzle-orm';
 
 type Iteminput = {
   itemId: number;
@@ -33,8 +33,16 @@ export async function addItemToCart(customerId: number, itemId: number, quantity
       itemId: itemId,
       cartItemPrice: item.itemPrice,
       cartItemQuantity: quantity,
+    }).onConflictDoUpdate({
+      // Which columns to check for a "clash"
+      target: [cart.customerId, cart.itemId], 
+      // What to do if they clash: Add the new quantity to the existing one
+      set: {
+        cartItemQuantity: sql`${cart.cartItemQuantity} + ${quantity}`
+      }
     })
-    .returning();   
+    .returning();
+  
   return insertedItem; // Returns the newly created cart row
 }
 
@@ -105,34 +113,39 @@ export async function updateMultipleCartItems(
   customerId: number, 
   updates: { itemId: number; quantity: number }[]
 ) {
-  // Perform all updates inside a single database transaction
-  await db.transaction(async (tx) => {
+  // 1. The outer function remains 'async' for Next.js
+  // 2. The inner callback MUST NOT be 'async'
+  db.transaction((tx) => {
     for (const item of updates) {
       if (item.quantity <= 0) {
-        // Delete if quantity is 0
-        await tx.delete(cart)
+        // Delete if quantity is 0 (.run() executes it synchronously)
+        tx.delete(cart)
           .where(
             and(
               eq(cart.customerId, customerId),
               eq(cart.itemId, item.itemId)
             )
-          );
+          )
+          .run(); 
       } else {
-        // Update quantity
-        await tx.update(cart)
+        // Update quantity (.run() executes it synchronously)
+        tx.update(cart)
           .set({ cartItemQuantity: item.quantity })
           .where(
             and(
               eq(cart.customerId, customerId),
               eq(cart.itemId, item.itemId)
             )
-          );
+          )
+          .run();
       }
     }
   });
-
 }
 
+export async function clearCustomerCart(customerId: number) {
+  await db.delete(cart).where(eq(cart.customerId, customerId));
+}
 
 /** 
  * ITEM RELATED ACTIONS
@@ -237,13 +250,13 @@ export async function updateCustomerName(customerId: number, newName: string) {
 // customer can check out specific items in their cart
 export async function checkoutCustomerCart(customerId: number, itemIds: number[]) {
   // 1. Wrap everything in a transaction
-  return await db.transaction(async (tx) => {
+    const result = db.transaction((tx) => {
     // 2. Get the specific cart items
-    const cartItems = await tx.select().from(cart)
+    const cartItems = tx.select().from(cart)
       .where(and(
         eq(cart.customerId, customerId),
         inArray(cart.itemId, itemIds)
-      ));
+      )).all();
 
     if (cartItems.length === 0) {
       throw new Error('No items in cart to checkout');
@@ -255,38 +268,39 @@ export async function checkoutCustomerCart(customerId: number, itemIds: number[]
     }, 0);
 
     // 4. Create the Order
-    const [newOrder] = await tx.insert(orders).values({
+     const insertedOrders = tx.insert(orders).values({
       orderTotalPrice: totalPrice,
       customerId: customerId,
-    }).returning();
+    }).returning().all();
+    
+    const newOrder = insertedOrders[0];
 
-    // 5. Create the Order Items (The "Receipt")
     const orderItemsValues = cartItems.map(cartItem => ({
       orderId: newOrder.orderId,
       itemId: cartItem.itemId,
       orderItemQuantity: cartItem.cartItemQuantity
     }));
-    await tx.insert(orderItems).values(orderItemsValues);
+    
+    // Use .run() for operations where you don't need to return data
+    tx.insert(orderItems).values(orderItemsValues).run();
 
-    // 6. NEW: Create the Payment Record
-    // In a real app, you'd get a 'transactionId' from Stripe/PayPal here.
-    await tx.insert(payments).values({
+    tx.insert(payments).values({
       orderId: newOrder.orderId,
       paymentAmount: totalPrice,
-      // paymentTimestamp defaults to CURRENT_TIMESTAMP
-    });
+    }).run();
 
-    // 7. Remove checked out items from cart
-    await tx.delete(cart)
+    tx.delete(cart)
       .where(and(
         eq(cart.customerId, customerId),
         inArray(cart.itemId, itemIds)
-      ));
+      )).run();
 
+    // 4. Return the object directly (it is not a promise)
     return { 
       success: true, 
       orderId: newOrder.orderId, 
       amountPaid: totalPrice 
     };
   });
+  return result;
 }

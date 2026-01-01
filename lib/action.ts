@@ -6,7 +6,7 @@ import { eq, desc , and,inArray } from 'drizzle-orm';
 
 type Iteminput = {
   itemId: number;
-  quanity: number;
+  quantity: number;
 };
 
 /**
@@ -38,7 +38,7 @@ export async function addItemToCart(customerId: number, itemId: number, quantity
   return insertedItem; // Returns the newly created cart row
 }
 
-export async function addMultipleItemsToCart(customerId: number, itemsToAdd: ItemInput[]) {
+export async function addMultipleItemsToCart(customerId: number, itemsToAdd: Iteminput[]) {
   // Extract all item IDs to fetch their prices in ONE query
   const ids = itemsToAdd.map((i) => i.itemId);
   

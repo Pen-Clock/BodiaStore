@@ -84,7 +84,6 @@ export async function removeItemFromCart(customerId: number, itemId: number) {
   )
 } 
 
-
 // update one cart item quantity
 export async function updateCartItemQuanity(customerId: number, itemId:number, newQuantity:number){
     if (newQuantity <= 0){
@@ -148,10 +147,11 @@ export async function getItemById(itemId: number) {
   return item;
 }
 
-export async function createNewItem(itemName: string, itemDescription: string, itemPrice: number) {
+export async function createNewItem(itemName: string, itemDescription: string, itemImagePath: string ,itemPrice: number) {
   const [newItem] = await db.insert(items).values({
     itemName:itemName,
     itemDescription: itemDescription,
+    itemImagePath: itemImagePath,
     itemPrice: itemPrice
   }).returning();
   return newItem;
@@ -168,13 +168,6 @@ export async function updateItemPrice(itemId: number, newPrice: number) {
   .where(eq(items.itemId, itemId));
 }
 
-export async function updateItemDescription(itemId: number, newDescription: string) {
-  await db.update(items).set({
-    itemDescription : newDescription
-  })
-  .where(eq(items.itemId, itemId));
-}
-
 export async function updateItemName(itemId: number, newName: string) {
   await db.update(items).set({
     itemName : newName
@@ -182,10 +175,25 @@ export async function updateItemName(itemId: number, newName: string) {
   .where(eq(items.itemId, itemId));
 }
 
-export async function updateItem(itemId: number, itemName: string, itemDescription: string, itemPrice: number) {
+export async function updateItemDescription(itemId: number, newDescription: string) {
+  await db.update(items).set({
+    itemDescription : newDescription
+  })
+  .where(eq(items.itemId, itemId));
+}
+
+export async function updateItemImageUrl(itemId: number, newImagePath: string) {
+  await db.update(items).set({
+    itemImagePath : newImagePath
+  })
+  .where(eq(items.itemId, itemId));
+}
+
+export async function updateItem(itemId: number, itemName: string, itemImagePath:string, itemDescription: string, itemPrice: number) {
   await db.update(items).set({
     itemName: itemName,
     itemDescription: itemDescription,
+    itemImagePath: itemImagePath,
     itemPrice: itemPrice
   }).where(eq(items.itemId, itemId));
 }
@@ -225,4 +233,60 @@ export async function updateCustomerName(customerId: number, newName: string) {
 /**
  * CHECK OUT RELATED FUNCTIONS
  */
+// when customer checkout it would created and order and order items as a form of reciepts
+// customer can check out specific items in their cart
+export async function checkoutCustomerCart(customerId: number, itemIds: number[]) {
+  // 1. Wrap everything in a transaction
+  return await db.transaction(async (tx) => {
+    // 2. Get the specific cart items
+    const cartItems = await tx.select().from(cart)
+      .where(and(
+        eq(cart.customerId, customerId),
+        inArray(cart.itemId, itemIds)
+      ));
 
+    if (cartItems.length === 0) {
+      throw new Error('No items in cart to checkout');
+    }
+
+    // 3. Calculate total price
+    const totalPrice = cartItems.reduce((sum, item) => {
+      return sum + (item.cartItemPrice * item.cartItemQuantity);
+    }, 0);
+
+    // 4. Create the Order
+    const [newOrder] = await tx.insert(orders).values({
+      orderTotalPrice: totalPrice,
+      customerId: customerId,
+    }).returning();
+
+    // 5. Create the Order Items (The "Receipt")
+    const orderItemsValues = cartItems.map(cartItem => ({
+      orderId: newOrder.orderId,
+      itemId: cartItem.itemId,
+      orderItemQuantity: cartItem.cartItemQuantity
+    }));
+    await tx.insert(orderItems).values(orderItemsValues);
+
+    // 6. NEW: Create the Payment Record
+    // In a real app, you'd get a 'transactionId' from Stripe/PayPal here.
+    await tx.insert(payments).values({
+      orderId: newOrder.orderId,
+      paymentAmount: totalPrice,
+      // paymentTimestamp defaults to CURRENT_TIMESTAMP
+    });
+
+    // 7. Remove checked out items from cart
+    await tx.delete(cart)
+      .where(and(
+        eq(cart.customerId, customerId),
+        inArray(cart.itemId, itemIds)
+      ));
+
+    return { 
+      success: true, 
+      orderId: newOrder.orderId, 
+      amountPaid: totalPrice 
+    };
+  });
+}

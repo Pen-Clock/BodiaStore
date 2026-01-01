@@ -6,6 +6,7 @@ export const items = sqliteTable('items', {
   itemId: integer('item_id').primaryKey({ autoIncrement: true }),
   itemName: text('item_name').notNull(),
   itemDescription: text('item_description'),
+  itemImagePath: text('item_image_url'),
   itemPrice: real('item_price').notNull()
 });
 

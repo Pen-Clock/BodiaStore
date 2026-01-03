@@ -1,72 +1,92 @@
-'use server'
-import { NextResponse } from 'next/server';
-import db from './db';
-import { items, customers, orders, orderItems, payments , cart} from './schema';
-import { eq, desc, and, inArray, sql } from 'drizzle-orm';
+"use server"
+
+import db from "./db"
+import { items, customers, orders, orderItems, payments, cart } from "./schema"
+import { eq, desc, and, inArray, sql } from "drizzle-orm"
 
 type Iteminput = {
-  itemId: number;
-  quantity: number;
-};
+  itemId: number
+  quantity: number
+}
 
 /**
  * CART RELATED ACTIONS
  */
-export async function  getCartItems(customerID: number) {
-  const cartItems = await db.select().from(cart).where(eq(cart.customerId, customerID));
-  return cartItems;
+export async function getCartItems(customerID: number) {
+  const cartItems = await db
+    .select()
+    .from(cart)
+    .where(eq(cart.customerId, customerID))
+
+  return cartItems
 }
 
-export async function addItemToCart(customerId: number, itemId: number, quantity: number) {
+export async function addItemToCart(
+  customerId: number,
+  itemId: number,
+  quantity: number
+) {
   // Fetch the item price from the items table
-  await ensureCustomerExists(customerId);
+  await ensureCustomerExists(customerId)
 
-  const item = await db.select().from(items)
-    .where(eq(items.itemId, itemId)).limit(1).get();
+  const found = await db
+    .select()
+    .from(items)
+    .where(eq(items.itemId, itemId))
+    .limit(1)
+
+  const item = found[0]
 
   if (!item) {
-    throw new Error(`Item with ID ${itemId} not found`);
+    throw new Error(`Item with ID ${itemId} not found`)
   }
+
   // Insert the item into the cart table
-  const [insertedItem] = await db
+  const inserted = await db
     .insert(cart)
     .values({
       customerId: customerId,
       itemId: itemId,
       cartItemPrice: item.itemPrice,
       cartItemQuantity: quantity,
-    }).onConflictDoUpdate({
+    })
+    .onConflictDoUpdate({
       // Which columns to check for a "clash"
-      target: [cart.customerId, cart.itemId], 
+      target: [cart.customerId, cart.itemId],
       // What to do if they clash: Add the new quantity to the existing one
       set: {
-        cartItemQuantity: sql`${cart.cartItemQuantity} + ${quantity}`
-      }
+        cartItemQuantity: sql`${cart.cartItemQuantity} + ${quantity}`,
+      },
     })
-    .returning();
-  
-  return insertedItem; // Returns the newly created cart row
+    .returning()
+
+  return inserted[0] // Returns the newly created cart row
 }
 
-export async function addMultipleItemsToCart(customerId: number, itemsToAdd: Iteminput[]) {
+export async function addMultipleItemsToCart(
+  customerId: number,
+  itemsToAdd: Iteminput[]
+) {
+  await ensureCustomerExists(customerId)
+
   // Extract all item IDs to fetch their prices in ONE query
-  const ids = itemsToAdd.map((i) => i.itemId);
-  
+  const ids = itemsToAdd.map((i) => i.itemId)
+
   // Get the prices for all items in the list
   const productDetails = await db
     .select()
     .from(items)
-    .where(inArray(items.itemId, ids));
+    .where(inArray(items.itemId, ids))
 
   // Create a "Map" so we can easily find the price by ID
-  const priceMap = new Map(productDetails.map(p => [p.itemId, p.itemPrice]));
+  const priceMap = new Map(productDetails.map((p) => [p.itemId, p.itemPrice]))
 
   // Prepare the data for the cart table
   const cartValues = itemsToAdd.map((item) => {
-    const price = priceMap.get(item.itemId);
-    
+    const price = priceMap.get(item.itemId)
+
     if (price === undefined) {
-      throw new Error(`Item with ID ${item.itemId} not found`);
+      throw new Error(`Item with ID ${item.itemId} not found`)
     }
 
     return {
@@ -74,161 +94,193 @@ export async function addMultipleItemsToCart(customerId: number, itemsToAdd: Ite
       itemId: item.itemId,
       cartItemPrice: price,
       cartItemQuantity: item.quantity,
-    };
-  });
+    }
+  })
 
   // Perform the bulk insert
-  const insertedItems = await db
-    .insert(cart)
-    .values(cartValues)
-    .returning();
+  const insertedItems = await db.insert(cart).values(cartValues).returning()
 
-  return insertedItems; // Returns an array of newly created cart rows
+  return insertedItems // Returns an array of newly created cart rows
 }
 
 export async function removeItemFromCart(customerId: number, itemId: number) {
-  await db.delete(cart).where(and(
-        eq(cart.customerId, customerId),
-        eq(cart.itemId, itemId)
-      )
-  )
-} 
+  await db
+    .delete(cart)
+    .where(and(eq(cart.customerId, customerId), eq(cart.itemId, itemId)))
+}
 
 // update one cart item quantity
-export async function updateCartItemQuanity(customerId: number, itemId:number, newQuantity:number){
-    if (newQuantity <= 0){
-        await db.delete(cart).where(and(
-          eq(cart.customerId, customerId),
-          eq(cart.itemId, itemId)
-        ));
-    } else {
+export async function updateCartItemQuanity(
+  customerId: number,
+  itemId: number,
+  newQuantity: number
+) {
+  if (newQuantity <= 0) {
+    await db
+      .delete(cart)
+      .where(and(eq(cart.customerId, customerId), eq(cart.itemId, itemId)))
+  } else {
     // 2. Simple update
-    await db.update(cart)
+    await db
+      .update(cart)
       .set({ cartItemQuantity: newQuantity })
-      .where(and(
-          eq(cart.customerId, customerId),
-          eq(cart.itemId, itemId)));
+      .where(and(eq(cart.customerId, customerId), eq(cart.itemId, itemId)))
   }
 }
 
 export async function updateMultipleCartItems(
-  customerId: number, 
+  customerId: number,
   updates: { itemId: number; quantity: number }[]
 ) {
   // 1. The outer function remains 'async' for Next.js
   // 2. The inner callback MUST NOT be 'async'
-  db.transaction((tx) => {
+  //
+  // NOTE: When using Turso/libSQL (async driver), the transaction callback
+  // *should* be async and awaited. The intent of the original comment still
+  // applies: keep all the operations inside one transaction.
+  await db.transaction(async (tx) => {
     for (const item of updates) {
       if (item.quantity <= 0) {
         // Delete if quantity is 0 (.run() executes it synchronously)
-        tx.delete(cart)
+        //
+        // NOTE: With Turso/libSQL, we await the query instead of using .run().
+        await tx
+          .delete(cart)
           .where(
-            and(
-              eq(cart.customerId, customerId),
-              eq(cart.itemId, item.itemId)
-            )
+            and(eq(cart.customerId, customerId), eq(cart.itemId, item.itemId))
           )
-          .run(); 
       } else {
         // Update quantity (.run() executes it synchronously)
-        tx.update(cart)
+        //
+        // NOTE: With Turso/libSQL, we await the query instead of using .run().
+        await tx
+          .update(cart)
           .set({ cartItemQuantity: item.quantity })
           .where(
-            and(
-              eq(cart.customerId, customerId),
-              eq(cart.itemId, item.itemId)
-            )
+            and(eq(cart.customerId, customerId), eq(cart.itemId, item.itemId))
           )
-          .run();
       }
     }
-  });
+  })
 }
 
 export async function clearCustomerCart(customerId: number) {
-  await db.delete(cart).where(eq(cart.customerId, customerId));
-  
+  await db.delete(cart).where(eq(cart.customerId, customerId))
 }
 
 export async function getCartWithDetails(customerId: number) {
-    const rows = await db
-      .select({
-        itemId: items.itemId,
-        name: items.itemName,
-        image: items.itemImagePath,
-        unitPrice: cart.cartItemPrice,
-        quantity: cart.cartItemQuantity,
-      })
-      .from(cart)
-      .innerJoin(items, eq(cart.itemId, items.itemId))
-      .where(eq(cart.customerId, customerId))
-      .orderBy(desc(items.itemId));
+  const rows = await db
+    .select({
+      itemId: items.itemId,
+      name: items.itemName,
+      image: items.itemImagePath,
+      unitPrice: cart.cartItemPrice,
+      quantity: cart.cartItemQuantity,
+    })
+    .from(cart)
+    .innerJoin(items, eq(cart.itemId, items.itemId))
+    .where(eq(cart.customerId, customerId))
+    .orderBy(desc(items.itemId))
 
-    return rows;
+  return rows
 }
 
-/** 
+/**
  * ITEM RELATED ACTIONS
-*/
+ */
 export async function getAllItems() {
-  const allItems = await db.select().from(items).orderBy(desc(items.itemId));
-  return allItems;
+  const allItems = await db.select().from(items).orderBy(desc(items.itemId))
+  return allItems
 }
 
 export async function getItemById(itemId: number) {
-  const item = await db.select().from(items).where(eq(items.itemId, itemId)).limit(1).get();
-  return item;
+  const found = await db
+    .select()
+    .from(items)
+    .where(eq(items.itemId, itemId))
+    .limit(1)
+
+  return found[0] ?? null
 }
 
-export async function createNewItem(itemName: string, itemDescription: string, itemImagePath: string ,itemPrice: number) {
-  const [newItem] = await db.insert(items).values({
-    itemName:itemName,
-    itemDescription: itemDescription,
-    itemImagePath: itemImagePath,
-    itemPrice: itemPrice
-  }).returning();
-  return newItem;
+export async function createNewItem(
+  itemName: string,
+  itemDescription: string,
+  itemImagePath: string | null,
+  itemPrice: number
+) {
+  const inserted = await db
+    .insert(items)
+    .values({
+      itemName: itemName,
+      itemDescription: itemDescription,
+      itemImagePath: itemImagePath,
+      itemPrice: itemPrice,
+    })
+    .returning()
+
+  return inserted[0]
 }
 
 export async function deleteItem(itemId: number) {
-  await db.delete(items).where(eq(items.itemId, itemId));
+  await db.delete(items).where(eq(items.itemId, itemId))
 }
 
 export async function updateItemPrice(itemId: number, newPrice: number) {
-  await db.update(items).set({
-    itemPrice : newPrice
-  })
-  .where(eq(items.itemId, itemId));
+  await db
+    .update(items)
+    .set({
+      itemPrice: newPrice,
+    })
+    .where(eq(items.itemId, itemId))
 }
 
 export async function updateItemName(itemId: number, newName: string) {
-  await db.update(items).set({
-    itemName : newName
-  })
-  .where(eq(items.itemId, itemId));
+  await db
+    .update(items)
+    .set({
+      itemName: newName,
+    })
+    .where(eq(items.itemId, itemId))
 }
 
-export async function updateItemDescription(itemId: number, newDescription: string) {
-  await db.update(items).set({
-    itemDescription : newDescription
-  })
-  .where(eq(items.itemId, itemId));
+export async function updateItemDescription(
+  itemId: number,
+  newDescription: string
+) {
+  await db
+    .update(items)
+    .set({
+      itemDescription: newDescription,
+    })
+    .where(eq(items.itemId, itemId))
 }
 
 export async function updateItemImageUrl(itemId: number, newImagePath: string) {
-  await db.update(items).set({
-    itemImagePath : newImagePath
-  })
-  .where(eq(items.itemId, itemId));
+  await db
+    .update(items)
+    .set({
+      itemImagePath: newImagePath,
+    })
+    .where(eq(items.itemId, itemId))
 }
 
-export async function updateItem(itemId: number, itemName: string, itemImagePath:string, itemDescription: string, itemPrice: number) {
-  await db.update(items).set({
-    itemName: itemName,
-    itemDescription: itemDescription,
-    itemImagePath: itemImagePath,
-    itemPrice: itemPrice
-  }).where(eq(items.itemId, itemId));
+export async function updateItem(
+  itemId: number,
+  itemName: string,
+  itemImagePath: string | null,
+  itemDescription: string,
+  itemPrice: number
+) {
+  await db
+    .update(items)
+    .set({
+      itemName: itemName,
+      itemDescription: itemDescription,
+      itemImagePath: itemImagePath,
+      itemPrice: itemPrice,
+    })
+    .where(eq(items.itemId, itemId))
 }
 
 /**
@@ -236,113 +288,141 @@ export async function updateItem(itemId: number, itemName: string, itemImagePath
  */
 
 export async function createNewCustomer(customerName: string) {
-  const [newCustomer] = await db.insert(customers).values({
-    customerName: customerName
-  }).returning();
-  return newCustomer;
+  const inserted = await db
+    .insert(customers)
+    .values({
+      customerName: customerName,
+    })
+    .returning()
+
+  return inserted[0]
 }
 
 export async function getCustomerById(customerId: number) {
-  const customer = await db.select().from(customers).where(eq(customers.customerId, customerId)).limit(1).get();
-  return customer;
+  const found = await db
+    .select()
+    .from(customers)
+    .where(eq(customers.customerId, customerId))
+    .limit(1)
+
+  return found[0] ?? null
 }
 
 export async function getAllCustomers() {
-  const allCustomers = await db.select().from(customers).orderBy(desc(customers.customerId));
-  return allCustomers;
+  const allCustomers = await db
+    .select()
+    .from(customers)
+    .orderBy(desc(customers.customerId))
+
+  return allCustomers
 }
 
 export async function deleteCustomer(customerId: number) {
-  await db.delete(customers).where(eq(customers.customerId, customerId));
+  await db.delete(customers).where(eq(customers.customerId, customerId))
 }
 
 export async function updateCustomerName(customerId: number, newName: string) {
-  await db.update(customers).set({
-    customerName : newName
-  })
-  .where(eq(customers.customerId, customerId));
+  await db
+    .update(customers)
+    .set({
+      customerName: newName,
+    })
+    .where(eq(customers.customerId, customerId))
 }
 
 /**
  * CHECK OUT RELATED FUNCTIONS
  */
-// when customer checkout it would created and order and order items as a form of reciepts
+// when customer checkout it would created and order and order items as a form of
+// reciepts
 // customer can check out specific items in their cart
 export async function checkoutCustomerCart(customerId: number, itemIds: number[]) {
-  await ensureCustomerExists(customerId);
   // 1. Wrap everything in a transaction
-    const result = db.transaction((tx) => {
+  await ensureCustomerExists(customerId)
+
+  const result = await db.transaction(async (tx) => {
     // 2. Get the specific cart items
-    const cartItems = tx.select().from(cart)
-      .where(and(
-        eq(cart.customerId, customerId),
-        inArray(cart.itemId, itemIds)
-      )).all();
+    const cartItems = await tx
+      .select()
+      .from(cart)
+      .where(and(eq(cart.customerId, customerId), inArray(cart.itemId, itemIds)))
 
     if (cartItems.length === 0) {
-      throw new Error('No items in cart to checkout');
+      throw new Error("No items in cart to checkout")
     }
 
     // 3. Calculate total price
     const totalPrice = cartItems.reduce((sum, item) => {
-      return sum + (item.cartItemPrice * item.cartItemQuantity);
-    }, 0);
+      return sum + item.cartItemPrice * item.cartItemQuantity
+    }, 0)
 
     // 4. Create the Order
-     const insertedOrders = tx.insert(orders).values({
-      orderTotalPrice: totalPrice,
-      customerId: customerId,
-    }).returning().all();
-    
-    const newOrder = insertedOrders[0];
+    const insertedOrders = await tx
+      .insert(orders)
+      .values({
+        orderTotalPrice: totalPrice,
+        customerId: customerId,
+      })
+      .returning()
 
-    const orderItemsValues = cartItems.map(cartItem => ({
+    const newOrder = insertedOrders[0]
+    if (!newOrder) {
+      throw new Error("Failed to create order")
+    }
+
+    const orderItemsValues = cartItems.map((cartItem) => ({
       orderId: newOrder.orderId,
       itemId: cartItem.itemId,
-      orderItemQuantity: cartItem.cartItemQuantity
-    }));
-    
-    // Use .run() for operations where you don't need to return data
-    tx.insert(orderItems).values(orderItemsValues).run();
+      orderItemQuantity: cartItem.cartItemQuantity,
+    }))
 
-    tx.insert(payments).values({
+    // Use .run() for operations where you don't need to return data
+    //
+    // NOTE: With Turso/libSQL, we await the query instead of using .run().
+    await tx.insert(orderItems).values(orderItemsValues)
+
+    await tx.insert(payments).values({
       orderId: newOrder.orderId,
       paymentAmount: totalPrice,
-    }).run();
+    })
 
-    tx.delete(cart)
-      .where(and(
-        eq(cart.customerId, customerId),
-        inArray(cart.itemId, itemIds)
-      )).run();
+    await tx
+      .delete(cart)
+      .where(
+        and(eq(cart.customerId, customerId), inArray(cart.itemId, itemIds))
+      )
 
     // 4. Return the object directly (it is not a promise)
-    return { 
-      success: true, 
-      orderId: newOrder.orderId, 
-      amountPaid: totalPrice 
-    };
-  });
-  return result;
+    //
+    // NOTE: With Turso/libSQL, the outer transaction callback is async, but the
+    // return value is still the result of the transaction.
+    return {
+      success: true,
+      orderId: newOrder.orderId,
+      amountPaid: totalPrice,
+    }
+  })
+
+  return result
 }
 
 export async function ensureCustomerExists(customerId: number) {
-  const existing = await db
+  const found = await db
     .select()
     .from(customers)
     .where(eq(customers.customerId, customerId))
     .limit(1)
-    .get();
 
-  if (existing) return existing;
+  const existing = found[0]
+  if (existing) return existing
 
-  const [created] = await db
+  const created = await db
     .insert(customers)
     .values({
       customerId,
       customerName: "Demo Customer",
     })
-    .returning();
+    .returning()
 
-  return created;
+  return created[0]
 }

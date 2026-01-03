@@ -1,13 +1,20 @@
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import Database from 'better-sqlite3';
-import * as schema from './schema';
+import { createClient } from "@libsql/client"
+import { drizzle } from "drizzle-orm/libsql"
+import * as schema from "./schema"
 
-const sqlite = new Database('data.db');
+const url = process.env.TURSO_DATABASE_URL
+const authToken = process.env.TURSO_AUTH_TOKEN
 
-// // Enable automatic casing here
-// export const db = drizzle(sqlite, { 
-//   schema, 
-//   casing: 'snake_case' 
-// });
+if (!url) {
+  throw new Error("Missing TURSO_DATABASE_URL")
+}
 
-export default drizzle(sqlite);
+if (!authToken) {
+  throw new Error("Missing TURSO_AUTH_TOKEN")
+}
+
+const client = createClient({ url, authToken })
+
+const db = drizzle(client, { schema })
+
+export default db

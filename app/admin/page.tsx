@@ -1,10 +1,21 @@
 import { revalidatePath } from "next/cache"
 
-import {
-  createNewItem,
-  deleteItem,
-  getAllItems,
-} from "@/lib/actions"
+import { createNewItem, deleteItem, getAllItems } from "@/lib/actions"
+
+function normalizeImageInput(raw: string) {
+  const s = raw.trim().replace(/^['"]|['"]$/g, "")
+  if (!s) return null
+  if (s.startsWith("/")) return s
+
+  try {
+    const u = new URL(s)
+    if (u.protocol === "http:" || u.protocol === "https:") return s
+  } catch {
+    // ignore
+  }
+
+  return null
+}
 
 export default async function AdminPage() {
   const products = await getAllItems()
@@ -14,7 +25,7 @@ export default async function AdminPage() {
 
     const name = String(formData.get("name") || "").trim()
     const description = String(formData.get("description") || "").trim()
-    const imageUrl = String(formData.get("imageUrl") || "").trim()
+    const imageUrlRaw = String(formData.get("imageUrl") || "")
     const priceRaw = String(formData.get("price") || "").trim()
 
     const price = Number.parseFloat(priceRaw)
@@ -24,12 +35,9 @@ export default async function AdminPage() {
       throw new Error("Price must be a valid non-negative number")
     }
 
-    await createNewItem(
-      name,
-      description || "",
-      imageUrl || "",
-      price
-    )
+    const imageUrl = normalizeImageInput(imageUrlRaw)
+
+    await createNewItem(name, description || "", imageUrl ?? "", price)
 
     revalidatePath("/")
     revalidatePath("/admin")
@@ -92,7 +100,7 @@ export default async function AdminPage() {
             <input
               name="imageUrl"
               className="mt-1 h-10 w-full rounded-md border border-gray-200 px-3"
-              placeholder="https://..."
+              placeholder="https://... or /local-image.jpg"
             />
           </label>
 

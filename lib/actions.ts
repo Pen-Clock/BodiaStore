@@ -407,6 +407,14 @@ export async function checkoutCustomerCart(customerId: number, itemIds: number[]
 }
 
 export async function ensureCustomerExists(customerId: number) {
+  await db
+    .insert(customers)
+    .values({
+      customerId,
+      customerName: "Demo Customer",
+    })
+    .onConflictDoNothing()
+
   const found = await db
     .select()
     .from(customers)
@@ -414,15 +422,9 @@ export async function ensureCustomerExists(customerId: number) {
     .limit(1)
 
   const existing = found[0]
-  if (existing) return existing
+  if (!existing) {
+    throw new Error("Failed to ensure customer exists")
+  }
 
-  const created = await db
-    .insert(customers)
-    .values({
-      customerId,
-      customerName: "Demo Customer",
-    })
-    .returning()
-
-  return created[0]
+  return existing
 }

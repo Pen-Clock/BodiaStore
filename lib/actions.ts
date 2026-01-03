@@ -2,7 +2,7 @@
 import { NextResponse } from 'next/server';
 import db from './db';
 import { items, customers, orders, orderItems, payments , cart} from './schema';
-import { eq, desc , and,inArray , sql} from 'drizzle-orm';
+import { eq, desc, and, inArray, sql } from 'drizzle-orm';
 
 type Iteminput = {
   itemId: number;
@@ -19,6 +19,8 @@ export async function  getCartItems(customerID: number) {
 
 export async function addItemToCart(customerId: number, itemId: number, quantity: number) {
   // Fetch the item price from the items table
+  await ensureCustomerExists(customerId);
+
   const item = await db.select().from(items)
     .where(eq(items.itemId, itemId)).limit(1).get();
 
@@ -145,6 +147,24 @@ export async function updateMultipleCartItems(
 
 export async function clearCustomerCart(customerId: number) {
   await db.delete(cart).where(eq(cart.customerId, customerId));
+  
+}
+
+export async function getCartWithDetails(customerId: number) {
+    const rows = await db
+      .select({
+        itemId: items.itemId,
+        name: items.itemName,
+        image: items.itemImagePath,
+        unitPrice: cart.cartItemPrice,
+        quantity: cart.cartItemQuantity,
+      })
+      .from(cart)
+      .innerJoin(items, eq(cart.itemId, items.itemId))
+      .where(eq(cart.customerId, customerId))
+      .orderBy(desc(items.itemId));
+
+    return rows;
 }
 
 /** 
@@ -249,6 +269,7 @@ export async function updateCustomerName(customerId: number, newName: string) {
 // when customer checkout it would created and order and order items as a form of reciepts
 // customer can check out specific items in their cart
 export async function checkoutCustomerCart(customerId: number, itemIds: number[]) {
+  await ensureCustomerExists(customerId);
   // 1. Wrap everything in a transaction
     const result = db.transaction((tx) => {
     // 2. Get the specific cart items
@@ -303,4 +324,25 @@ export async function checkoutCustomerCart(customerId: number, itemIds: number[]
     };
   });
   return result;
+}
+
+export async function ensureCustomerExists(customerId: number) {
+  const existing = await db
+    .select()
+    .from(customers)
+    .where(eq(customers.customerId, customerId))
+    .limit(1)
+    .get();
+
+  if (existing) return existing;
+
+  const [created] = await db
+    .insert(customers)
+    .values({
+      customerId,
+      customerName: "Demo Customer",
+    })
+    .returning();
+
+  return created;
 }

@@ -407,24 +407,35 @@ export async function checkoutCustomerCart(customerId: number, itemIds: number[]
 }
 
 export async function ensureCustomerExists(customerId: number) {
-  await db
-    .insert(customers)
-    .values({
-      customerId,
-      customerName: "Demo Customer",
-    })
-    .onConflictDoNothing()
-
+  // First, check if customer exists
   const found = await db
     .select()
     .from(customers)
     .where(eq(customers.customerId, customerId))
     .limit(1)
 
-  const existing = found[0]
-  if (!existing) {
+  if (found[0]) {
+    return found[0]
+  }
+
+  // Customer doesn't exist, create them
+  // Use INSERT OR REPLACE to handle the auto-increment edge case
+  const inserted = await db
+    .insert(customers)
+    .values({
+      customerId,
+      customerName: "Demo Customer",
+    })
+    .onConflictDoUpdate({
+      target: customers.customerId,
+      set: { customerName: "Demo Customer" },
+    })
+    .returning()
+
+  const result = inserted[0]
+  if (!result) {
     throw new Error("Failed to ensure customer exists")
   }
 
-  return existing
+  return result
 }

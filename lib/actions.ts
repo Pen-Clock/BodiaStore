@@ -3,7 +3,7 @@
 import db from "./db"
 import { items, customers, orders, orderItems, payments, cart } from "./schema"
 import { eq, desc, and, inArray, sql } from "drizzle-orm"
-
+import { revalidatePath } from "next/cache"
 type Iteminput = {
   itemId: number
   quantity: number
@@ -59,6 +59,8 @@ export async function addItemToCart(
       },
     })
     .returning()
+  revalidatePath("/")      // Revalidate home page (header cart count)
+  revalidatePath("/cart")  // Revalidate cart page
 
   return inserted[0] // Returns the newly created cart row
 }
@@ -107,6 +109,8 @@ export async function removeItemFromCart(customerId: number, itemId: number) {
   await db
     .delete(cart)
     .where(and(eq(cart.customerId, customerId), eq(cart.itemId, itemId)))
+    revalidatePath("/")
+    revalidatePath("/cart")
 }
 
 // update one cart item quantity
@@ -126,6 +130,8 @@ export async function updateCartItemQuanity(
       .set({ cartItemQuantity: newQuantity })
       .where(and(eq(cart.customerId, customerId), eq(cart.itemId, itemId)))
   }
+  revalidatePath("/")
+  revalidatePath("/cart")
 }
 
 export async function updateMultipleCartItems(
@@ -166,6 +172,8 @@ export async function updateMultipleCartItems(
 
 export async function clearCustomerCart(customerId: number) {
   await db.delete(cart).where(eq(cart.customerId, customerId))
+  revalidatePath("/")
+  revalidatePath("/cart")
 }
 
 export async function getCartWithDetails(customerId: number) {

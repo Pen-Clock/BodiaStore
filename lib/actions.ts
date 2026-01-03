@@ -407,35 +407,21 @@ export async function checkoutCustomerCart(customerId: number, itemIds: number[]
 }
 
 export async function ensureCustomerExists(customerId: number) {
-  // First, check if customer exists
+  // Use INSERT OR IGNORE which works reliably in SQLite/Turso
+  await db.run(
+    sql`INSERT OR IGNORE INTO customers (customer_id, customer_name) VALUES (${customerId}, 'Demo Customer')`
+  )
+
   const found = await db
     .select()
     .from(customers)
     .where(eq(customers.customerId, customerId))
     .limit(1)
 
-  if (found[0]) {
-    return found[0]
-  }
-
-  // Customer doesn't exist, create them
-  // Use INSERT OR REPLACE to handle the auto-increment edge case
-  const inserted = await db
-    .insert(customers)
-    .values({
-      customerId,
-      customerName: "Demo Customer",
-    })
-    .onConflictDoUpdate({
-      target: customers.customerId,
-      set: { customerName: "Demo Customer" },
-    })
-    .returning()
-
-  const result = inserted[0]
-  if (!result) {
+  const existing = found[0]
+  if (!existing) {
     throw new Error("Failed to ensure customer exists")
   }
 
-  return result
+  return existing
 }

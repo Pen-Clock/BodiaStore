@@ -1,91 +1,24 @@
 "use client"
 
-import { useMemo, useOptimistic, useTransition } from "react"
+import { useMemo } from "react"
 import { useRouter } from "next/navigation"
-
 import { Button } from "@/components/ui/button"
-import {
-  checkoutCustomerCart,
-  clearCustomerCart,
-  removeItemFromCart,
-  updateCartItemQuanity,
-} from "@/lib/actions"
+import { useCart } from "@/lib/cart-store"
 
-export type CartLine = {
-  itemId: number
-  name: string
-  image: string | null
-  unitPrice: number
-  quantity: number
-}
-
-type OptimisticAction =
-  | { type: "update"; itemId: number; quantity: number }
-  | { type: "remove"; itemId: number }
-  | { type: "clear" }
-
-function cartReducer(state: CartLine[], action: OptimisticAction): CartLine[] {
-  switch (action.type) {
-    case "update":
-      return state.map((item) =>
-        item.itemId === action.itemId
-          ? { ...item, quantity: action.quantity }
-          : item
-      )
-    case "remove":
-      return state.filter((item) => item.itemId !== action.itemId)
-    case "clear":
-      return []
-  }
-}
-
-export default function CartClient({
-  initialItems,
-  customerId,
-}: {
-  initialItems: CartLine[]
-  customerId: number
-}) {
+export default function CartClient() {
   const router = useRouter()
-  const [isPending, startTransition] = useTransition()
-  const [items, addOptimistic] = useOptimistic(initialItems, cartReducer)
+  const { items, isPending, removeItem, updateQuantity, clear, checkout } =
+    useCart()
 
   const subtotal = useMemo(() => {
     return items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0)
   }, [items])
 
-  const handleQuantityChange = (itemId: number, quantity: number) => {
-    startTransition(async () => {
-      addOptimistic({ type: "update", itemId, quantity })
-      await updateCartItemQuanity(customerId, itemId, quantity)
-      router.refresh()
-    })
-  }
-
-  const remove = (itemId: number) => {
-    startTransition(async () => {
-      addOptimistic({ type: "remove", itemId })
-      await removeItemFromCart(customerId, itemId)
-      router.refresh()
-    })
-  }
-
-  const clear = () => {
-    startTransition(async () => {
-      addOptimistic({ type: "clear" })
-      await clearCustomerCart(customerId)
-      router.refresh()
-    })
-  }
-
-  const checkoutAll = () => {
-    const itemIds = items.map((i) => i.itemId)
-
-    startTransition(async () => {
-      const res = await checkoutCustomerCart(customerId, itemIds)
-      router.push(`/account?orderId=${res.orderId}`)
-      router.refresh()
-    })
+  const handleCheckout = async () => {
+    const result = await checkout()
+    if (result) {
+      router.push(`/account?orderId=${result.orderId}`)
+    }
   }
 
   if (items.length === 0) {
@@ -106,7 +39,7 @@ export default function CartClient({
             Update quantities or remove items.
           </p>
         </div>
-        <Button variant="outline" disabled={isPending} onClick={clear}>
+        <Button variant="outline" onClick={clear}>
           Clear cart
         </Button>
       </div>
@@ -132,7 +65,7 @@ export default function CartClient({
                 value={item.quantity}
                 onChange={(e) => {
                   const q = Math.max(0, parseInt(e.target.value || "0", 10))
-                  handleQuantityChange(item.itemId, q)
+                  updateQuantity(item.itemId, q)
                 }}
               />
 
@@ -140,11 +73,7 @@ export default function CartClient({
                 €{(item.unitPrice * item.quantity).toFixed(2)}
               </div>
 
-              <Button
-                variant="ghost"
-                disabled={isPending}
-                onClick={() => remove(item.itemId)}
-              >
+              <Button variant="ghost" onClick={() => removeItem(item.itemId)}>
                 Remove
               </Button>
             </div>
@@ -159,7 +88,7 @@ export default function CartClient({
             €{subtotal.toFixed(2)}
           </span>
         </div>
-        <Button disabled={isPending} onClick={checkoutAll}>
+        <Button onClick={handleCheckout} disabled={isPending}>
           {isPending ? "Processing..." : "Checkout"}
         </Button>
       </div>

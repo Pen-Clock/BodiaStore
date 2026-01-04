@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState, useTransition } from "react"
+import { useMemo, useOptimistic, useTransition } from "react"
 import { useRouter } from "next/navigation"
 
 import { Button } from "@/components/ui/button"
@@ -11,7 +11,6 @@ import {
   updateCartItemQuanity,
 } from "@/lib/actions"
 
-
 export type CartLine = {
   itemId: number
   name: string
@@ -20,35 +19,60 @@ export type CartLine = {
   quantity: number
 }
 
-export default function CartClient({initialItems,  customerId,}: {initialItems: CartLine[]
+type OptimisticAction =
+  | { type: "update"; itemId: number; quantity: number }
+  | { type: "remove"; itemId: number }
+  | { type: "clear" }
+
+function cartReducer(state: CartLine[], action: OptimisticAction): CartLine[] {
+  switch (action.type) {
+    case "update":
+      return state.map((item) =>
+        item.itemId === action.itemId
+          ? { ...item, quantity: action.quantity }
+          : item
+      )
+    case "remove":
+      return state.filter((item) => item.itemId !== action.itemId)
+    case "clear":
+      return []
+  }
+}
+
+export default function CartClient({
+  initialItems,
+  customerId,
+}: {
+  initialItems: CartLine[]
   customerId: number
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
-  const [items, setItems] = useState<CartLine[]>(initialItems)
+  const [items, addOptimistic] = useOptimistic(initialItems, cartReducer)
 
   const subtotal = useMemo(() => {
     return items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0)
   }, [items])
 
-  const commitQuantity = (itemId: number, quantity: number) => {
+  const handleQuantityChange = (itemId: number, quantity: number) => {
     startTransition(async () => {
+      addOptimistic({ type: "update", itemId, quantity })
       await updateCartItemQuanity(customerId, itemId, quantity)
       router.refresh()
     })
   }
 
   const remove = (itemId: number) => {
-    setItems((prev) => prev.filter((x) => x.itemId !== itemId))
     startTransition(async () => {
+      addOptimistic({ type: "remove", itemId })
       await removeItemFromCart(customerId, itemId)
       router.refresh()
     })
   }
 
   const clear = () => {
-    setItems([])
     startTransition(async () => {
+      addOptimistic({ type: "clear" })
       await clearCustomerCart(customerId)
       router.refresh()
     })
@@ -56,6 +80,7 @@ export default function CartClient({initialItems,  customerId,}: {initialItems: 
 
   const checkoutAll = () => {
     const itemIds = items.map((i) => i.itemId)
+
     startTransition(async () => {
       const res = await checkoutCustomerCart(customerId, itemIds)
       router.push(`/account?orderId=${res.orderId}`)
@@ -78,7 +103,7 @@ export default function CartClient({initialItems,  customerId,}: {initialItems: 
         <div>
           <h1 className="text-xl font-semibold text-gray-900">Cart</h1>
           <p className="mt-1 text-sm text-gray-600">
-            Update quantities or remove items. Changes save to the database.
+            Update quantities or remove items.
           </p>
         </div>
         <Button variant="outline" disabled={isPending} onClick={clear}>
@@ -106,14 +131,9 @@ export default function CartClient({initialItems,  customerId,}: {initialItems: 
                 className="h-9 w-20 rounded-md border border-gray-200 px-2 text-center"
                 value={item.quantity}
                 onChange={(e) => {
-                  const q = Number.parseInt(e.target.value || "0", 10)
-                  setItems((prev) =>
-                    prev.map((x) =>
-                      x.itemId === item.itemId ? { ...x, quantity: q } : x
-                    )
-                  )
+                  const q = Math.max(0, parseInt(e.target.value || "0", 10))
+                  handleQuantityChange(item.itemId, q)
                 }}
-                onBlur={() => commitQuantity(item.itemId, item.quantity)}
               />
 
               <div className="w-28 text-right text-sm text-gray-900">

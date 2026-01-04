@@ -1,9 +1,15 @@
 "use server"
 
+import { revalidateTag as nextRevalidateTag } from "next/cache"
+import { unstable_cache } from "next/cache"
 import db from "./db"
 import { items, customers, orders, orderItems, payments, cart } from "./schema"
 import { eq, desc, and, inArray, sql } from "drizzle-orm"
-import { revalidatePath } from "next/cache"
+
+function revalidateTag(tag: string) {
+  nextRevalidateTag(tag, "default")
+}
+
 type Iteminput = {
   itemId: number
   quantity: number
@@ -12,14 +18,19 @@ type Iteminput = {
 /**
  * CART RELATED ACTIONS
  */
-export async function getCartItems(customerID: number) {
-  const cartItems = await db
-    .select()
-    .from(cart)
-    .where(eq(cart.customerId, customerID))
 
-  return cartItems
-}
+export const getCartItems = unstable_cache(
+  async (customerId: number) => {
+    const cartItems = await db
+      .select()
+      .from(cart)
+      .where(eq(cart.customerId, customerId))
+
+    return cartItems
+  },
+  ["cart-items"],
+  { tags: ["cart"] }
+)
 
 export async function addItemToCart(
   customerId: number,
@@ -59,8 +70,8 @@ export async function addItemToCart(
       },
     })
     .returning()
-  revalidatePath("/")      // Revalidate home page (header cart count)
-  revalidatePath("/cart")  // Revalidate cart page
+
+  revalidateTag("cart")
 
   return inserted[0] // Returns the newly created cart row
 }
@@ -102,6 +113,8 @@ export async function addMultipleItemsToCart(
   // Perform the bulk insert
   const insertedItems = await db.insert(cart).values(cartValues).returning()
 
+  revalidateTag("cart")
+
   return insertedItems // Returns an array of newly created cart rows
 }
 
@@ -109,8 +122,8 @@ export async function removeItemFromCart(customerId: number, itemId: number) {
   await db
     .delete(cart)
     .where(and(eq(cart.customerId, customerId), eq(cart.itemId, itemId)))
-    revalidatePath("/")
-    revalidatePath("/cart")
+
+  revalidateTag("cart")
 }
 
 // update one cart item quantity
@@ -130,8 +143,8 @@ export async function updateCartItemQuanity(
       .set({ cartItemQuantity: newQuantity })
       .where(and(eq(cart.customerId, customerId), eq(cart.itemId, itemId)))
   }
-  revalidatePath("/")
-  revalidatePath("/cart")
+
+  revalidateTag("cart")
 }
 
 export async function updateMultipleCartItems(
@@ -168,48 +181,63 @@ export async function updateMultipleCartItems(
       }
     }
   })
+
+  revalidateTag("cart")
 }
 
 export async function clearCustomerCart(customerId: number) {
   await db.delete(cart).where(eq(cart.customerId, customerId))
-  revalidatePath("/")
-  revalidatePath("/cart")
+
+  revalidateTag("cart")
 }
 
-export async function getCartWithDetails(customerId: number) {
-  const rows = await db
-    .select({
-      itemId: items.itemId,
-      name: items.itemName,
-      image: items.itemImagePath,
-      unitPrice: cart.cartItemPrice,
-      quantity: cart.cartItemQuantity,
-    })
-    .from(cart)
-    .innerJoin(items, eq(cart.itemId, items.itemId))
-    .where(eq(cart.customerId, customerId))
-    .orderBy(desc(items.itemId))
+export const getCartWithDetails = unstable_cache(
+  async (customerId: number) => {
+    const rows = await db
+      .select({
+        itemId: items.itemId,
+        name: items.itemName,
+        image: items.itemImagePath,
+        unitPrice: cart.cartItemPrice,
+        quantity: cart.cartItemQuantity,
+      })
+      .from(cart)
+      .innerJoin(items, eq(cart.itemId, items.itemId))
+      .where(eq(cart.customerId, customerId))
+      .orderBy(desc(items.itemId))
 
-  return rows
-}
+    return rows
+  },
+  ["cart-with-details"],
+  { tags: ["cart", "items"] }
+)
 
 /**
  * ITEM RELATED ACTIONS
  */
-export async function getAllItems() {
-  const allItems = await db.select().from(items).orderBy(desc(items.itemId))
-  return allItems
-}
 
-export async function getItemById(itemId: number) {
-  const found = await db
-    .select()
-    .from(items)
-    .where(eq(items.itemId, itemId))
-    .limit(1)
+export const getAllItems = unstable_cache(
+  async () => {
+    const allItems = await db.select().from(items).orderBy(desc(items.itemId))
+    return allItems
+  },
+  ["all-items"],
+  { tags: ["items"] }
+)
 
-  return found[0] ?? null
-}
+export const getItemById = unstable_cache(
+  async (itemId: number) => {
+    const found = await db
+      .select()
+      .from(items)
+      .where(eq(items.itemId, itemId))
+      .limit(1)
+
+    return found[0] ?? null
+  },
+  ["item-by-id"],
+  { tags: ["items"] }
+)
 
 export async function createNewItem(
   itemName: string,
@@ -227,11 +255,16 @@ export async function createNewItem(
     })
     .returning()
 
+  revalidateTag("items")
+
   return inserted[0]
 }
 
 export async function deleteItem(itemId: number) {
   await db.delete(items).where(eq(items.itemId, itemId))
+
+  revalidateTag("items")
+  revalidateTag("cart") // Cart might reference this item
 }
 
 export async function updateItemPrice(itemId: number, newPrice: number) {
@@ -241,6 +274,8 @@ export async function updateItemPrice(itemId: number, newPrice: number) {
       itemPrice: newPrice,
     })
     .where(eq(items.itemId, itemId))
+
+  revalidateTag("items")
 }
 
 export async function updateItemName(itemId: number, newName: string) {
@@ -250,6 +285,8 @@ export async function updateItemName(itemId: number, newName: string) {
       itemName: newName,
     })
     .where(eq(items.itemId, itemId))
+
+  revalidateTag("items")
 }
 
 export async function updateItemDescription(
@@ -262,6 +299,8 @@ export async function updateItemDescription(
       itemDescription: newDescription,
     })
     .where(eq(items.itemId, itemId))
+
+  revalidateTag("items")
 }
 
 export async function updateItemImageUrl(itemId: number, newImagePath: string) {
@@ -271,6 +310,8 @@ export async function updateItemImageUrl(itemId: number, newImagePath: string) {
       itemImagePath: newImagePath,
     })
     .where(eq(items.itemId, itemId))
+
+  revalidateTag("items")
 }
 
 export async function updateItem(
@@ -289,6 +330,8 @@ export async function updateItem(
       itemPrice: itemPrice,
     })
     .where(eq(items.itemId, itemId))
+
+  revalidateTag("items")
 }
 
 /**
@@ -303,30 +346,42 @@ export async function createNewCustomer(customerName: string) {
     })
     .returning()
 
+  revalidateTag("customers")
+
   return inserted[0]
 }
 
-export async function getCustomerById(customerId: number) {
-  const found = await db
-    .select()
-    .from(customers)
-    .where(eq(customers.customerId, customerId))
-    .limit(1)
+export const getCustomerById = unstable_cache(
+  async (customerId: number) => {
+    const found = await db
+      .select()
+      .from(customers)
+      .where(eq(customers.customerId, customerId))
+      .limit(1)
 
-  return found[0] ?? null
-}
+    return found[0] ?? null
+  },
+  ["customer-by-id"],
+  { tags: ["customers"] }
+)
 
-export async function getAllCustomers() {
-  const allCustomers = await db
-    .select()
-    .from(customers)
-    .orderBy(desc(customers.customerId))
+export const getAllCustomers = unstable_cache(
+  async () => {
+    const allCustomers = await db
+      .select()
+      .from(customers)
+      .orderBy(desc(customers.customerId))
 
-  return allCustomers
-}
+    return allCustomers
+  },
+  ["all-customers"],
+  { tags: ["customers"] }
+)
 
 export async function deleteCustomer(customerId: number) {
   await db.delete(customers).where(eq(customers.customerId, customerId))
+
+  revalidateTag("customers")
 }
 
 export async function updateCustomerName(customerId: number, newName: string) {
@@ -336,6 +391,8 @@ export async function updateCustomerName(customerId: number, newName: string) {
       customerName: newName,
     })
     .where(eq(customers.customerId, customerId))
+
+  revalidateTag("customers")
 }
 
 /**
@@ -344,7 +401,10 @@ export async function updateCustomerName(customerId: number, newName: string) {
 // when customer checkout it would created and order and order items as a form of
 // reciepts
 // customer can check out specific items in their cart
-export async function checkoutCustomerCart(customerId: number, itemIds: number[]) {
+export async function checkoutCustomerCart(
+  customerId: number,
+  itemIds: number[]
+) {
   // 1. Wrap everything in a transaction
   await ensureCustomerExists(customerId)
 
@@ -353,7 +413,9 @@ export async function checkoutCustomerCart(customerId: number, itemIds: number[]
     const cartItems = await tx
       .select()
       .from(cart)
-      .where(and(eq(cart.customerId, customerId), inArray(cart.itemId, itemIds)))
+      .where(
+        and(eq(cart.customerId, customerId), inArray(cart.itemId, itemIds))
+      )
 
     if (cartItems.length === 0) {
       throw new Error("No items in cart to checkout")
@@ -411,25 +473,44 @@ export async function checkoutCustomerCart(customerId: number, itemIds: number[]
     }
   })
 
+  revalidateTag("cart")
+  revalidateTag("orders")
+
   return result
 }
 
 export async function ensureCustomerExists(customerId: number) {
-  // Use INSERT OR IGNORE which works reliably in SQLite/Turso
-  await db.run(
-    sql`INSERT OR IGNORE INTO customers (customer_id, customer_name) VALUES (${customerId}, 'Demo Customer')`
-  )
-
+  // First, check if customer exists
   const found = await db
     .select()
     .from(customers)
     .where(eq(customers.customerId, customerId))
     .limit(1)
 
-  const existing = found[0]
-  if (!existing) {
+  if (found[0]) {
+    return found[0]
+  }
+
+  // Customer doesn't exist, create them
+  // Use onConflictDoUpdate to handle the auto-increment edge case
+  const inserted = await db
+    .insert(customers)
+    .values({
+      customerId,
+      customerName: "Demo Customer",
+    })
+    .onConflictDoUpdate({
+      target: customers.customerId,
+      set: { customerName: "Demo Customer" },
+    })
+    .returning()
+
+  const result = inserted[0]
+  if (!result) {
     throw new Error("Failed to ensure customer exists")
   }
 
-  return existing
+  revalidateTag("customers")
+
+  return result
 }
